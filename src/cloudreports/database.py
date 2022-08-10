@@ -3,6 +3,185 @@
 from google.cloud import bigquery
 from google.oauth2 import service_account
 import json
+import clickhouse_driver
+import pandas
+
+class ClickHouse(object):
+    """Define ClickHouse.
+
+    See
+    https://clickhouse.com/
+    """
+
+    def __init__(self, host, database, user, password, verify):
+        if not isinstance(host, str):
+            raise ValueError("Pass a string for host")
+        if not isinstance(database, str):
+            raise ValueError("Pass a string for database")
+        if not isinstance(user, str):
+            raise ValueError("Pass a string for user")
+        if not isinstance(password, str):
+            raise ValueError("Pass a string for password")
+        if not isinstance(verify, str):
+            raise ValueError("Pass a string for verify")
+
+        self._host = host
+        self._database = database
+        self._user = user
+        self._password = password
+        # certificate
+        self._verify = verify
+
+        self.client = clickhouse_driver.Client(
+            host=self._host, port=9440, database=self._database, user=self._user,
+            password=self._password, secure=True, ca_certs=self._verify,
+            settings={'use_numpy': True})
+
+        self.table_audit = 'brs_audit'
+        self.table_audit_partition = 'brs_audit_partition'
+        self.table_temp = 'brs_audit_temp'
+        self.tables_created = False
+
+
+    def load_json_data(self, data):
+        if not self.tables_created:
+            self.create_tables()
+            self.tables_created = True
+
+        df = pandas.DataFrame(data)
+        # for FIRST_VALUE(event_moment) OVER(PARTITION BY entity_id ORDER BY event_moment2 DESC)
+        df['event_moment2'] = df['event_moment']
+
+        self.client.insert_dataframe(f'INSERT INTO {self._database}.{self.table_audit} VALUES', df)
+
+        # brs_audit_temp
+        query = f"""
+                    CREATE TABLE IF NOT EXISTS {self._database}.brs_audit_temp (
+                            entity_id String,
+                            entity_type String,
+                            entity_data String,
+                            event_type String,
+                            event_moment DateTime,	
+                            event_moment2 DateTime
+                    ) ENGINE = MergeTree()
+                    order by event_moment"""
+        self.client.execute(query)
+        self.client.insert_dataframe(f'INSERT INTO {self._database}.{self.table_temp} VALUES', df)
+        self.fill_audit_partition('brs_audit_temp')
+        self.client.execute(f"drop table if exists {self.table_temp}")
+
+
+    def create_tables(self):
+	    # brs_audit
+        query = f"""
+                    CREATE TABLE IF NOT EXISTS {self._database}.brs_audit (
+                            entity_id String,
+                            entity_type String,
+                            entity_data String,
+                            event_type String,
+                            event_moment DateTime,	
+                            event_moment2 DateTime
+                    ) ENGINE = MergeTree()
+                    order by event_moment"""
+        self.client.execute(query)
+
+        # brs_audit_partition
+        query = f"""
+                CREATE TABLE IF NOT EXISTS {self._database}.brs_audit_partition (
+                        entity_id String,
+                        entity_type String,
+                        entity_data String,	
+                        event_type String,
+                        event_moment DateTime,	
+                        event_moment2 DateTime,
+                        partition_entity_type Int64) ENGINE = MergeTree
+                PARTITION BY partition_entity_type
+                order by partition_entity_type"""
+        self.client.execute(query)
+
+
+    def table_exists(self, table):
+        if self.client.execute(
+                f"SELECT name FROM system.tables WHERE name = '{table}' and database = '{self._database}'"):
+            return True
+        else:
+            return False
+
+
+    def fill_audit_partition(self, basic_table):
+        query = f"""
+            INSERT INTO {self._database}.brs_audit_partition
+            SELECT 	
+                    entity_id,
+                    entity_type,
+                    entity_data,
+                    event_type,
+                    event_moment,
+                    event_moment2,
+                    abs(farmFingerprint64(entity_type) % 4000)        
+            FROM {self._database}.{basic_table}
+            """
+        self.client.execute(query)
+
+
+    def update_tables(self):
+        """Adding views for new entity types"""
+        # rebuild brs_audit_partition
+        self.client.execute(f"drop table if exists {self.table_audit_partition}")
+        self.create_tables()
+        self.fill_audit_partition('brs_audit')
+
+        # build views
+        query = f"""SELECT distinct(entity_type),
+                FIRST_VALUE(entity_data) OVER( PARTITION BY entity_type ORDER BY (length(extractAll(ifNull(entity_data,''), '"([^"]*)":')))  desc ) AS entity_data
+                FROM (
+                    SELECT * from (
+                            SELECT entity_type, entity_data,
+                            ROW_NUMBER() OVER (PARTITION BY entity_type ORDER BY event_moment desc) rn
+                            FROM {self._database}.brs_audit_partition
+                        ) t1
+                        WHERE t1.rn < 1000
+                ) t2"""
+
+        rows = self.client.execute(query)
+        result_query = []
+        for row in rows:
+            for item in row:
+                result_query.append(item)
+        result_query = dict(zip(result_query[::2], result_query[1::2]))
+
+        for key, value in result_query.items():
+            view_id = f"brv_{key}"
+            if not self.table_exists(view_id):
+                sql_query = f"""create view {self._database}.brv_{key}\nas\nSELECT\nentity_id,\nevent_moment\n"""
+
+                result_query_str = json.loads(value)
+
+                for keys, values in result_query_str.items():
+                    sql_query += ",JSON_VALUE(entity_data, '$.{}') as `{}`".format(keys, keys) + "\n"
+
+                sql_query += f"""FROM ( SELECT entity_type, entity_id, entity_data, event_moment FROM 
+                            (SELECT entity_type, entity_id, 
+                            FIRST_VALUE(entity_data) OVER(PARTITION BY entity_id ORDER BY event_moment2 DESC) AS entity_data,
+                            FIRST_VALUE(event_moment) OVER(PARTITION BY entity_id ORDER BY event_moment2 DESC) AS event_moment
+                            FROM {self._database}.brs_audit_partition
+                            WHERE partition_entity_type = abs(farmFingerprint64('{key}') % 4000) 
+                            AND entity_type = '{key}' AND entity_id is not null
+                            ORDER BY  entity_id, event_moment DESC)
+                            GROUP BY entity_type, entity_id, entity_data, event_moment )"""
+
+                self.client.execute(sql_query)
+
+
+    def delete_tables(self, full_delete = True):
+        query = f"""SELECT name FROM system.tables WHERE database = '{self._database}'"""
+        tables = self.client.execute(query)
+        for table in tables:
+            if table[0][:3] == 'brv' or (table[0][:3] == 'brs' and full_delete):
+                self.client.execute(f"drop table if exists {self._database}.{table[0]}")
+
+
+
 
 
 class BigQuery(object):

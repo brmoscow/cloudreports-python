@@ -4,7 +4,7 @@ import json
 import datetime
 
 
-# Data destination initialization
+# Data destination initialization (BigQuery)
 # TODO(developer): Change project, dataset and key_path to the path to the Google BigQuery service
 #                  account key file.
 #                  See https://cloud.google.com/iam/docs/creating-managing-service-account-keys
@@ -12,9 +12,21 @@ import datetime
 project = 'my_project'
 dataset = 'my_dataset'
 key_path = 'credentials-bigquery.json'
-
 db = database.BigQuery(project, dataset, credentials_file_path=key_path)
+
+
+# Data destination initialization (ClickHouse)
+# TODO(developer): Change host, db_name, user, password and key_path to the path to the certificate.
+#                  See https://cloud.yandex.ru/docs/managed-clickhouse/operations/connect
+# host = 'myhost'
+# db_name = 'mydb'
+# user = 'myuser'
+# password = '....'
+# key_path = 'YandexInternalRootCA.crt'
+# db = database.ClickHouse(host, db_name, user, password, key_path)
+
 client = client.Client(db)
+
 
 # Load examples data from https://api.nasa.gov
 # NeoWs data
