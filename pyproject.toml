@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cloudreports"
-version = "0.0.1"
+version = "0.0.3"
 authors = [
   { name="BR Systems", email="help@cloudreports.ru" },
 ]
@@ -16,6 +16,14 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Operating System :: OS Independent",
+]
+dependencies = [
+    "google-cloud-bigquery",
+    "google-auth",
+    "google-auth-oauthlib",
+    "google-auth-httplib2",
+    "clickhouse_driver",
+    "pandas", 
 ]
 
 [project.urls]
