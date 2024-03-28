@@ -37,11 +37,12 @@ for key, value in r['near_earth_objects'].items():
     for row in value:        
         # send data to BigQuery
         # load_json_data method arguments:
-        #   entity_id - entity unique identifier, e.g. document number
+        #   entity_href - entity unique identifier, e.g. document number (technical field)
+        #   entity_id - entity unique identifier, e.g. document number 
         #   entity_type - e.g. document type
         #   entity_data - data from API in json format
         #   event_moment - date the entity was modified or created
-        client.load_json_data(entity_id=row['id'], entity_type='NeoWs',
+        client.load_json_data(entity_href=row['id'], entity_id=row['id'], entity_type='NeoWs',
             entity_data=row, event_moment=date)
 
 # DONKI data
@@ -50,7 +51,7 @@ r = r.json()
 for row in r:     
     date = datetime.datetime.strptime(row['startTime'], '%Y-%m-%dT%H:%MZ') 
     # send data to BigQuery
-    client.load_json_data(row['activityID'], 'DONKI', row, date)
+    client.load_json_data(row['activityID'], row['activityID'], 'DONKI', row, date)
 
 # must be called before completion
 client.finish_load_json_data()   

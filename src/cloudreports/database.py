@@ -5,6 +5,7 @@ from google.oauth2 import service_account
 import json
 import clickhouse_driver
 import pandas
+import base64
 
 class ClickHouse(object):
     """Define ClickHouse.
@@ -57,6 +58,7 @@ class ClickHouse(object):
         # brs_audit_temp
         query = f"""
                     CREATE TABLE IF NOT EXISTS {self._database}.brs_audit_temp (
+                            entity_href String,
                             entity_id String,
                             entity_type String,
                             entity_data String,
@@ -75,6 +77,7 @@ class ClickHouse(object):
 	    # brs_audit
         query = f"""
                     CREATE TABLE IF NOT EXISTS {self._database}.brs_audit (
+                            entity_href String,
                             entity_id String,
                             entity_type String,
                             entity_data String,
@@ -88,6 +91,7 @@ class ClickHouse(object):
         # brs_audit_partition
         query = f"""
                 CREATE TABLE IF NOT EXISTS {self._database}.brs_audit_partition (
+                        entity_href String,
                         entity_id String,
                         entity_type String,
                         entity_data String,	
@@ -112,6 +116,7 @@ class ClickHouse(object):
         query = f"""
             INSERT INTO {self._database}.brs_audit_partition
             SELECT 	
+                    entity_href,
                     entity_id,
                     entity_type,
                     entity_data,
@@ -153,22 +158,23 @@ class ClickHouse(object):
         for key, value in result_query.items():
             view_id = f"brv_{key}"
             if not self.table_exists(view_id):
-                sql_query = f"""create view {self._database}.brv_{key}\nas\nSELECT\nentity_id,\nevent_moment\n"""
+                sql_query = f"""create view {self._database}.brv_{key}\nas\nSELECT\nentity_href,\nentity_id,\nevent_moment\n"""
 
                 result_query_str = json.loads(value)
 
                 for keys, values in result_query_str.items():
                     sql_query += ",JSON_VALUE(entity_data, '$.{}') as `{}`".format(keys, keys) + "\n"
 
-                sql_query += f"""FROM ( SELECT entity_type, entity_id, entity_data, event_moment FROM 
-                            (SELECT entity_type, entity_id, 
-                            FIRST_VALUE(entity_data) OVER(PARTITION BY entity_id ORDER BY event_moment2 DESC) AS entity_data,
-                            FIRST_VALUE(event_moment) OVER(PARTITION BY entity_id ORDER BY event_moment2 DESC) AS event_moment
+                sql_query += f"""FROM ( SELECT entity_type, entity_href, entity_id, entity_data, event_moment FROM 
+                            (SELECT entity_type, entity_href, 
+                            FIRST_VALUE(entity_id) OVER(PARTITION BY entity_href ORDER BY event_moment2 DESC) AS entity_id,
+                            FIRST_VALUE(entity_data) OVER(PARTITION BY entity_href ORDER BY event_moment2 DESC) AS entity_data,
+                            FIRST_VALUE(event_moment) OVER(PARTITION BY entity_href ORDER BY event_moment2 DESC) AS event_moment
                             FROM {self._database}.brs_audit_partition
                             WHERE partition_entity_type = abs(farmFingerprint64('{key}') % 4000) 
-                            AND entity_type = '{key}' AND entity_id is not null
-                            ORDER BY  entity_id, event_moment DESC)
-                            GROUP BY entity_type, entity_id, entity_data, event_moment )"""
+                            AND entity_type = '{key}' 
+                            ORDER BY  entity_href, event_moment DESC)
+                            GROUP BY entity_type, entity_href, entity_id, entity_data, event_moment )"""
 
                 self.client.execute(sql_query)
 
@@ -181,6 +187,9 @@ class ClickHouse(object):
                 self.client.execute(f"drop table if exists {self._database}.{table[0]}")
 
 
+    def run_sql(self, query):
+        self.client.execute(query)        
+
 
 
 
@@ -191,9 +200,9 @@ class BigQuery(object):
     https://cloud.google.com/bigquery
     """
 
-    def __init__(self, project, dataset, credentials_file_path):
-        if not isinstance(credentials_file_path, str):
-            raise ValueError("Pass a string for credentials")
+    def __init__(self, project, dataset, credentials_file_path=None, credentials_service_account_info=None):
+        if not (isinstance(credentials_file_path, str) or isinstance(credentials_service_account_info, str)):
+            raise ValueError("Pass a string for credentials_file_path or credentials_service_account_info")
         if not isinstance(project, str):
             raise ValueError("Pass a string for project")
         if not isinstance(dataset, str):
@@ -202,9 +211,13 @@ class BigQuery(object):
         self._project = project
         self._dataset = dataset        
 
-        credentials = service_account.Credentials.from_service_account_file(
-            credentials_file_path, scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        )
+        if isinstance(credentials_file_path, str):
+            credentials = service_account.Credentials.from_service_account_file(
+                credentials_file_path, scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+        elif isinstance(credentials_service_account_info, str):
+            credentials = service_account.Credentials.from_service_account_info(json.loads(base64.b64decode(credentials_service_account_info)))   
+
         self.client = bigquery.Client(project=self._project, credentials=credentials) 
         self.dataset_ref = self.client.dataset(dataset_id=self._dataset)
         self.table_audit = self.dataset_ref.table('brs_audit')  
@@ -222,6 +235,7 @@ class BigQuery(object):
 
         job_config = bigquery.LoadJobConfig(
             schema=[
+                bigquery.SchemaField("entity_href", "STRING"),
                 bigquery.SchemaField("entity_id", "STRING"),
                 bigquery.SchemaField("entity_type", "STRING"),
                 bigquery.SchemaField("entity_data", "STRING"),
@@ -243,6 +257,7 @@ class BigQuery(object):
         query_job = self.client.query(
             f"""
             CREATE TABLE IF NOT EXISTS `{self._project}.{self._dataset}.brs_audit_partition` (
+                    entity_href STRING,
                     entity_id STRING,
                     entity_type STRING,
                     entity_data STRING,
@@ -260,6 +275,7 @@ class BigQuery(object):
         if self.table_exists(self.table_audit):
             sql_query = f"""
             SELECT 	
+                entity_href,
                 entity_id,
                 entity_type,
                 entity_data,
@@ -288,7 +304,8 @@ class BigQuery(object):
                     f"""
                     INSERT INTO `{self._project}.{self._dataset}.brs_audit_partition` 
                     ( 
-                        SELECT 	
+                        SELECT
+                            entity_href, 	
                             entity_id,
                             entity_type,
                             entity_data,
@@ -306,7 +323,6 @@ class BigQuery(object):
                 self.client.delete_table(self.table_audit_partition, not_found_ok=True)
                 self.client.delete_table(self.table_temp, not_found_ok=True)
                 self.create_tables_for_sandbox()
-
     
 
     def update_tables(self):        
@@ -348,7 +364,7 @@ class BigQuery(object):
             if not self.table_exists(view_id):
                 sql_query = """-- Use JSON functions to extract values.
 -- See https://cloud.google.com/bigquery/docs/reference/standard-sql/json_functions
-SELECT\n    entity_id,\n    event_moment,\n"""
+SELECT\n    entity_href,\n    entity_id,\n    event_moment,\n"""
   
                 result_query_str = json.loads(value)
 
@@ -357,22 +373,26 @@ SELECT\n    entity_id,\n    event_moment,\n"""
                     sql_query += '    JSON_EXTRACT_SCALAR(entity_data, "$.{}") as `{}`'.format(keys, keys) + ",\n"
                             
                 sql_query += f"""FROM (
-        SELECT entity_type, entity_id, entity_data, event_moment FROM
-            (SELECT entity_type, entity_id,                   
+        SELECT entity_href, entity_type, entity_id, entity_data, event_moment FROM
+            (SELECT entity_href, entity_type,  
+                FIRST_VALUE(entity_id) OVER(
+                    PARTITION BY entity_href
+                    ORDER BY event_moment DESC
+                ) AS entity_id,                   
                 FIRST_VALUE(entity_data) OVER(
-                    PARTITION BY entity_id
+                    PARTITION BY entity_href
                     ORDER BY event_moment DESC
                 ) AS entity_data,
                 FIRST_VALUE(event_moment) OVER(
-                    PARTITION BY entity_id 
+                    PARTITION BY entity_href
                     ORDER BY event_moment DESC
                 ) AS event_moment
 
             FROM `{self._project}.{self._dataset}.brs_audit_partition` 
             WHERE partition_entity_type = ABS(MOD(FARM_FINGERPRINT('{key}'), 4000))
-                AND entity_type = '{key}' AND entity_id is not null
-            ORDER BY  entity_id, event_moment DESC)    
-        GROUP BY entity_type, entity_id, entity_data, event_moment
+                AND entity_type = '{key}' 
+            ORDER BY  entity_href, event_moment DESC)    
+        GROUP BY entity_href, entity_type, entity_id, entity_data, event_moment
     )
                 """            
             
@@ -387,4 +407,8 @@ SELECT\n    entity_id,\n    event_moment,\n"""
             if table.table_id[:3] == 'brv' or (table.table_id[:3] == 'brs' and full_delete):
                 self.client.delete_table(table, not_found_ok=True)
 
+
+    def run_sql(self, query):
+        query_job = self.client.query(query)
+        query_job.result()
 

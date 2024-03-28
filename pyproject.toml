@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cloudreports"
-version = "0.0.3"
+version = "0.0.5"
 authors = [
   { name="BR Systems", email="help@cloudreports.ru" },
 ]
@@ -23,7 +23,8 @@ dependencies = [
     "google-auth-oauthlib",
     "google-auth-httplib2",
     "clickhouse_driver",
-    "pandas", 
+    "pandas",
+    "requests", 
 ]
 
 [project.urls]
