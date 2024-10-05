@@ -1,5 +1,5 @@
 # cloudreports-python 
-Официальная библиотека проекта https://cloudreports.ru
+Официальная библиотека проекта https://cloudreports.kz
 
 ## Оглавление
 
