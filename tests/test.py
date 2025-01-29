@@ -14,19 +14,17 @@ dataset = 'my_dataset'
 key_path = 'credentials-bigquery.json'
 db = database.BigQuery(project, dataset, credentials_file_path=key_path)
 
-
 # Data destination initialization (ClickHouse)
-# TODO(developer): Change host, db_name, user, password and key_path to the path to the certificate.
-#                  See https://cloud.yandex.ru/docs/managed-clickhouse/operations/connect
-# host = 'myhost'
-# db_name = 'mydb'
-# user = 'myuser'
-# password = '....'
-# key_path = 'YandexInternalRootCA.crt'
-# db = database.ClickHouse(host, db_name, user, password, key_path)
+# TODO(developer): Change host, user, password, verify, db_name
+#                  See https://yandex.cloud/en/docs/managed-clickhouse/operations/connect/
+# host = 'hostname.mdb.yandexcloud.net'
+# user = 'user'
+# password = 'password'
+# verify = '.../YandexInternalRootCA.crt'
+# db_name = 'dbname'
+# db = database.ClickHouse(host, db_name, user, password, verify)
 
 client = client.Client(db)
-
 
 # Load examples data from https://api.nasa.gov
 # NeoWs data

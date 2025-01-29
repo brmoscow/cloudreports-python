@@ -14,7 +14,7 @@ class ClickHouse(object):
     https://clickhouse.com/
     """
 
-    def __init__(self, host, database, user, password, verify):
+    def __init__(self, host, database, user, password, verify=None, port=9440, secure=True):
         if not isinstance(host, str):
             raise ValueError("Pass a string for host")
         if not isinstance(database, str):
@@ -23,8 +23,6 @@ class ClickHouse(object):
             raise ValueError("Pass a string for user")
         if not isinstance(password, str):
             raise ValueError("Pass a string for password")
-        if not isinstance(verify, str):
-            raise ValueError("Pass a string for verify")
 
         self._host = host
         self._database = database
@@ -34,9 +32,9 @@ class ClickHouse(object):
         self._verify = verify
 
         self.client = clickhouse_driver.Client(
-            host=self._host, port=9440, database=self._database, user=self._user,
-            password=self._password, secure=True, ca_certs=self._verify,
-            settings={'use_numpy': True})
+            host=self._host, port=port, database=self._database, user=self._user,
+            password=self._password,  ca_certs=self._verify,
+            secure=secure, settings={'use_numpy': True}) 
 
         self.table_audit = 'brs_audit'
         self.table_audit_partition = 'brs_audit_partition'
@@ -163,7 +161,9 @@ class ClickHouse(object):
                 result_query_str = json.loads(value)
 
                 for keys, values in result_query_str.items():
-                    sql_query += ",JSON_VALUE(entity_data, '$.{}') as `{}`".format(keys, keys) + "\n"
+                    keys2 = keys
+                    if keys == 'entity_id': keys2 = 'entity_entity_id' 
+                    sql_query += ",JSON_VALUE(entity_data, '$.{}') as `{}`".format(keys, keys2) + "\n"
 
                 sql_query += f"""FROM ( SELECT entity_type, entity_href, entity_id, entity_data, event_moment FROM 
                             (SELECT entity_type, entity_href, 
@@ -411,4 +411,3 @@ SELECT\n    entity_href,\n    entity_id,\n    event_moment,\n"""
     def run_sql(self, query):
         query_job = self.client.query(query)
         query_job.result()
-

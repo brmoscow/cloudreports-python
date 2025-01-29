@@ -59,7 +59,7 @@ class Client(object):
         return json.loads(r.content)
 
 
-    def set_integration(self, load_date=None, load_rows=None, load_percent=None, tables_qty=None):
+    def set_integration(self, load_date=None, load_rows=None, load_percent=None, tables_qty=None, status=None, status_stop=None):
         """Set intrgration data to CloudReports platform"""
 
         if self.cr_api_url is None:
@@ -77,7 +77,11 @@ class Client(object):
         if load_percent is not None and type(load_percent) is int:
             data['load_percent'] = load_percent 
         if tables_qty is not None and type(tables_qty) is int:
-            data['tables_qty'] = tables_qty      
+            data['tables_qty'] = tables_qty 
+        if status is not None and type(status) is int and status in [0,1]:
+            data['status'] = status
+        if status_stop is not None and type(status_stop) is int and status_stop in [0,1]:
+            data['status_stop'] = status_stop                 
 
         headers = {
                 'Authorization': f'cr_api_token {self.cr_api_token}'
